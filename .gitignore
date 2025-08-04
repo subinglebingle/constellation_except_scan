@@ -1,0 +1,12 @@
+__pycache__/
+checkpoints/
+data/
+images/
+wandb/
+README.md
+requirements.txt
+*.npz
+*.pt
+*.h5s
+nohup.out
+*.log
