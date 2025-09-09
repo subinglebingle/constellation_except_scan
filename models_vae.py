@@ -46,7 +46,7 @@ class UNet(nn.Module):
             cbr=nn.Sequential(*layers)
             return cbr
         
-        #contracting path
+        #enc
         self.enc1_1=CBR2d(in_channels=4,out_channels=64) #원래 in_channels=1 #4=3channels+1scope
         self.enc1_2=CBR2d(in_channels=64,out_channels=64)
 
@@ -69,7 +69,7 @@ class UNet(nn.Module):
 
         self.enc5_1=CBR2d(in_channels=512,out_channels=1024)
 
-        #Expansive path
+        #dec
         self.dec5_1=CBR2d(in_channels=1024,out_channels=512)
 
         self.unpool4=nn.ConvTranspose2d(in_channels=512, out_channels=512,
@@ -140,27 +140,37 @@ class UNet(nn.Module):
         dec1_1=self.dec1_1(dec1_2)
 
         x=self.fc(dec1_1)
-        
-        return x
+        return x #(16,2,128,128)
 
 class AttentionNet(nn.Module):
     def __init__(self, conf):
         super().__init__()
         self.conf = conf
         self.unet = UNet().to(device)
-                        # (num_blocks=conf.num_blocks,
-                        #  in_channels=4,
-                        #  out_channels=2,
-                        #  channel_base=conf.channel_base)
 
-    def forward(self, x, scope):
+    def forward(self, x, scope): #x: (16,3,128,128) 
         inp = torch.cat((x, scope), 1)
-        logits = self.unet(inp)
-        alpha = torch.softmax(logits, 1)
-        # output channel 0 represents alpha_k,
-        # channel 1 represents (1 - alpha_k).
-        mask = scope * alpha[:, 0:1]
-        new_scope = scope * alpha[:, 1:2]
+        logits = self.unet(inp) #logits: 16,2,128,128
+        #alpha = torch.softmax(logits, 1) #16,2,128,128
+        log_alpha = F.log_softmax(logits, dim=1)   #16,2,128,128   # 로그 확률(log softmax) 계산
+
+        # # output channel 0 represents alpha_k,
+        # # channel 1 represents (1 - alpha_k).
+        # mask = scope + alpha[:, 0:1] #16,1,128,128
+        # new_scope = scope + alpha[:, 1:2] #16,1,128,128
+
+        # return mask, new_scope
+
+        # log domain 변환
+        eps = 1e-6
+        log_scope = (scope+eps).log()              # scope -> log scope
+        log_mask = log_scope + log_alpha[:, 0:1]    # log m_k
+        new_log_scope = log_scope + log_alpha[:, 1:2]  # log s_k
+
+        # 다시 확률 domain으로 변환해서 반환
+        mask = log_mask.exp()
+        new_scope = new_log_scope.exp()
+
         return mask, new_scope
 
 class EncoderNet(nn.Module):
@@ -181,17 +191,26 @@ class EncoderNet(nn.Module):
             width = (width - 1) // 2
             height = (height - 1) // 2
 
+        fc_in = 64 * width * height
+
         self.mlp = nn.Sequential(
-            nn.Linear(64 * width * height, 256), 
+            nn.Linear(fc_in, 256),
             nn.ReLU(inplace=True),
-            nn.Linear(256, 32)
+            nn.Linear(256, 32),
+            nn.ReLU(inplace=True)
         )
+
+        latent_dim = conf.latent_dim
+        self.fc_mu = nn.Linear(32, latent_dim)
+        self.fc_logvar = nn.Linear(32, latent_dim)
 
     def forward(self, x):
         x = self.convs(x)
-        x = x.view(x.shape[0], -1)
-        x = self.mlp(x)
-        return x
+        x = x.view(x.size(0), -1)
+        x=self.mlp(x)
+        mu = self.fc_mu(x)
+        logvar = self.fc_logvar(x)
+        return mu, logvar
 
 class DecoderNet(nn.Module):
     def __init__(self, height, width):
@@ -199,7 +218,7 @@ class DecoderNet(nn.Module):
         self.height = height
         self.width = width
         self.convs = nn.Sequential(
-            nn.Conv2d(18, 32, 3),
+            nn.Conv2d(conf.latent_dim+2, 32, 3), # +2인 이유: y/x좌표 2채널(공간 정보)(coord_map)을 더해줬기 때문 
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 32, 3),
             nn.ReLU(inplace=True),
@@ -221,6 +240,26 @@ class DecoderNet(nn.Module):
         inp = torch.cat((z_tiled, coord_map), 1)
         result = self.convs(inp)
         return result
+    
+def reparameterize(mu, logvar):
+    std = (0.5 * logvar).exp()
+    eps = torch.randn_like(std)
+    return mu + eps * std
+
+def compute_kl(mu, logvar):
+    return -0.5 * torch.sum(1 + logvar - mu.pow(2) - logvar.exp(), dim=1)
+    
+# class VAE(nn.Module):
+#     def __init__(self, width, height):
+#         super().__init__()
+#         self.encoder = EncoderNet(width, height)
+#         self.decoder = DecoderNet(height, width)
+
+#     def forward(self, x):
+#         mu, logvar = self.encoder(x)
+#         z = reparameterize(mu, logvar)
+#         out = self.decoder(z)
+#         return out, mu, logvar
 
 class Monet(nn.Module):
     def __init__(self, conf, height, width):
@@ -232,90 +271,128 @@ class Monet(nn.Module):
         self.beta = conf.beta
         self.gamma = conf.gamma
 
-    def forward(self, x):
+    def forward(self, x): #x: 64/4, 3, 128, 128 (16,3,128,128)
         scope = torch.ones_like(x[:, 0:1])
+        # scope = torch.zeros_like(x[:, 0:1])  # log(1) = 0, 로그 공간 초기화
         masks = []
         zs=[] #...............latent vector 모음 (constellation을 위해 추가)
         for i in range(self.conf.num_slots-1):
             mask, scope = self.attention(x, scope)
             masks.append(mask)
-        masks.append(scope) #num_slot-1+1
 
-        loss = torch.zeros_like(x[:, 0, 0, 0])
+        masks.append(scope) #num_slot-1+1 #8,16,1,128,128
+
+        loss = torch.zeros_like(x[:, 0, 0, 0]) #16,
         mask_preds = []
         full_reconstruction = torch.zeros_like(x)
         p_xs = torch.zeros_like(loss)
         kl_zs = torch.zeros_like(loss)
+
+        eps = 1e-6  # log 안정화용
+
         for i, mask in enumerate(masks):
             z, kl_z = self.encoder_step(x, mask)
-            # print("z shape:", z.shape)
             zs.append(z) #............latent vector 모음 (constellation을 위해 추가)
+           
             sigma = self.conf.bg_sigma if i == 0 else self.conf.fg_sigma
-          
-            # print("mask shape:", len(mask))
-            # print("mask shape:", len(mask[0]))
-            # print("mask shape:", len(mask[0][0]))
-            # print("mask shape:", len(mask[0][0][0]))
-
             p_x, x_recon, mask_pred = self.decoder_step(x, z, mask, sigma)
-            mask_preds.append(mask_pred)
-            loss += -p_x + self.beta * kl_z
-            p_xs += -p_x
+            mask_preds.append(mask_pred) #mask_pred: batch,128,128   #mask_preds:8,batch,128,128
+            
+            # --- 안정적 reconstruction loss ---
+            # p_x: (B,H,W,C) 픽셀별 log_prob
+            recon_loss = -p_x
+            for d in range(1, p_x.dim()):  # batch 제외한 나머지 dim 평균
+                recon_loss = recon_loss.mean(dim=d, keepdim=False)
+            #loss += recon_loss + self.beta * kl_z
+            #p_xs += recon_loss
             kl_zs += kl_z
-            full_reconstruction += mask * x_recon
+            # full reconstruction
+            full_reconstruction += mask * torch.clamp(x_recon, -10, 10)
+           
+            # loss += -p_x + self.beta * kl_z
+            # p_xs += -p_x
+            # kl_zs += kl_z
+            # full_reconstruction += mask * x_recon
+            
+        # print("p_xs:", torch.mean(p_xs))
+        # print()
+        # print("beta * kl_zs",torch.mean(self.beta*kl_zs))
+        # print()
 
+
+        #zs: 8,batch,16
         zs=torch.stack(zs,1) #...........latent vector 모음 차원 합치기
-
+        #zs: batch,8,16
+    
         # masks 리스트를 그대로 tensor로 concat하기 전 상태로 저장
         masks_list = masks.copy() #deepcopy? 흠.,
 
-        masks = torch.cat(masks, 1)
-        tr_masks = masks.permute(0, 2, 3, 1)
+        masks = torch.cat(masks, 1) #masks: batch,8,128,128
+
+        tr_masks = masks.permute(0, 2, 3, 1) #tr_masks: batch,128,128,8
+        tr_masks = tr_masks.clamp(min=1e-8, max=1.0)
+
+
         q_masks = dists.Categorical(probs=tr_masks)
-        q_masks_recon = dists.Categorical(logits=torch.stack(mask_preds, 3))
+        q_masks_recon = dists.Categorical(logits=torch.stack(mask_preds, 3)) #logits: batch,128,128,8
+
         kl_masks = dists.kl_divergence(q_masks, q_masks_recon)
         kl_masks = torch.sum(kl_masks, [1, 2])
 
-        loss += self.gamma * kl_masks
+        #loss += self.gamma * kl_masks
 
-        return {'loss': loss,
-                'masks': masks,           # 합쳐진 마스크 (B, K, H, W)
-                'masks_list': masks_list, # 합치기 전 리스트 (각 요소: (B,1,H,W)) 8,32,1,128,128
+        # print("gamma*kl_masks:", torch.mean(self.gamma*kl_masks))
+        # print()
+        # print("loss:", torch.mean(loss))
+        # print()
+
+        return {'recon_loss': recon_loss,
+                'kl_loss':kl_zs,
+                'masks_loss':self.gamma*kl_masks,
+                'masks': masks,           # 합쳐진 마스크 batch,8,128,128
+                'masks_list': masks_list, # 합치기 전 리스트 8,batch,1,128,128
                 'reconstructions': full_reconstruction,
-                'zs': zs #........latent vector 모음
+                'zs': zs #........latent vector 모음 #batch, 8, latent_dim       (64,8,16)
                 }
 
     def encoder_step(self, x, mask):
         encoder_input = torch.cat((x, mask), 1)
-        q_params = self.encoder(encoder_input)
-        means = torch.sigmoid(q_params[:, :16]) * 6 - 3
-        eps = 1e-5     # epsilon 추가로 0 미만 방지
-        sigmas = torch.sigmoid(q_params[:, 16:]) * 3 + eps
-        dist = dists.Normal(means, sigmas)
-        dist_0 = dists.Normal(0., sigmas)
-        z = means + dist_0.sample()
-        q_z = dist.log_prob(z)
-        kl_z = dists.kl_divergence(dist, dists.Normal(0., 1.))
-        kl_z = torch.sum(kl_z, 1)
+        mu, logvar = self.encoder(encoder_input)  # (batch, latent_dim)
+        z = reparameterize(mu, logvar)
+        kl_z = compute_kl(mu, logvar)
+
         return z, kl_z
+    #z: batch, latent_dim                 (64,16)
+    #kl_z: batch
 
 
-    def decoder_step(self, x, z, mask, sigma):
-        decoder_output = self.decoder(z)
+    def decoder_step(self, x, z, mask, sigma): #z:batch, latent
+        decoder_output = self.decoder(z) #batch,4,128,128
         x_recon = torch.sigmoid(decoder_output[:, :3])
         mask_pred = decoder_output[:, 3]
+
+        # nan 체크 및 출력
+        if torch.isnan(x_recon).any():
+            print("decoder_output contains nan:", torch.isnan(decoder_output).any().item())
+            print("decoder_output:", decoder_output)
+            print("x_recon contains nan:", torch.isnan(x_recon).any().item())
+            print("x_recon:", x_recon)
+            print("mask_pred contains nan:", torch.isnan(mask_pred).any().item())
+            print("mask_pred:", mask_pred)
+
         dist = dists.Normal(x_recon, sigma)
         p_x = dist.log_prob(x)
 
         if isinstance(mask, list):
             mask = torch.tensor(mask, dtype=p_x.dtype, device=p_x.device)
-        
-        # print("p_x shape:", p_x.shape)
-        # print("mask shape:", mask.shape)
 
         p_x *= mask
         p_x = torch.sum(p_x, [1, 2, 3])
+
         return p_x, x_recon, mask_pred
+        # p_x: batch
+        # x_recon: batch,3,128,128
+        # mask_pred: batch,128,128
 
 class MaskExtractor(nn.Module):
     def __init__(self, num_slots=conf.num_slots, latent_dim=conf.latent_dim):
@@ -534,7 +611,7 @@ class Constellation(nn.Module):
     
     def encode(self, x):
         monet_output = self.monet(x)
-        masks_list=monet_output['masks_list']
+        masks_list=monet_output['masks_list'] #(8,64,1,128,128)
         o = monet_output['zs'] #(128,8,16)
 
     #mask extractor & a는 learned mask 통과한 zs
@@ -642,3 +719,44 @@ class LossFunctions(nn.Module):
 
         L_total = L_rec + L_reorder + L_kl + L_entropy + L_condition
         return L_total
+
+class GECO(nn.Module):
+    def __init__(self, tolerance=0.05, alpha=0.99, lambda_step=1e-2):
+        super(GECO, self).__init__()
+        self.tolerance = tolerance
+        self.alpha = alpha
+        self.lambda_step = lambda_step
+
+        self.lambda_multiplier = torch.tensor(1., device=device) #.........수정...................................................device 따로 설정 안해줘도 되겟지 global인데,,?.. torch는 cpu에서만 해야되나,,? 수정!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+        self.C_ma = None  # constraint moving average
+
+    def compute_constraint(self, recon_error):
+        # constraint = error - tolerance
+        constraint = recon_error - self.tolerance
+        return constraint
+
+    def update(self, loss, recon_error):
+        constraint = self.compute_constraint(recon_error)
+        # moving average update
+        if self.C_ma is None:
+            self.C_ma = constraint.detach()
+        else:
+            self.C_ma = self.alpha * self.C_ma + (1 - self.alpha) * constraint.detach()
+
+        # GECO constraint with stop-gradient part
+        geco_constraint = constraint + (self.C_ma - constraint).detach()
+
+        # Lagrangian loss combined
+        lagrangian = loss + self.lambda_multiplier * geco_constraint
+
+        return lagrangian, geco_constraint
+
+    def update_lambda(self, geco_constraint):
+        with torch.no_grad():
+            self.lambda_multiplier *= torch.exp(self.lambda_step * geco_constraint)
+
+    def get_lambda(self):
+        return self.lambda_multiplier.item()
+
+    def get_moving_average(self):
+        return self.C_ma.item() if self.C_ma is not None else None
