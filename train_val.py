@@ -16,7 +16,7 @@ conf=config.sprite_config
 
 import matplotlib.pyplot as plt
 import wandb
-wandb.init(project="Constellation without scan", name=f"taming_{conf.data_num}")
+wandb.init(project="Constellation without scan", name=f"{conf.data_num}")
 #-----------------------------------------------------------------------------------------------------------------------------------
 # input_dim = 262144 #차원 맞추기(16*128*128) 
 # hidden_dim = conf.hidden_dim #128
@@ -65,7 +65,7 @@ def train_monet(monet, data, optimizer, epoch):
 
     return loss.item()
 
-def val_monet(monet, c_t, val_data, epoch):
+def val_monet(monet, val_data, epoch):
     monet.eval()
 
     if use_cuda:
@@ -73,14 +73,14 @@ def val_monet(monet, c_t, val_data, epoch):
 
     with torch.no_grad():
         output = monet(val_data)
-        #loss = torch.mean(output['loss'])
-        loss = output['kl_loss'] + torch.exp(log_lambda) * c_t + output['masks_loss']
+        loss = torch.mean(output['loss'])
+        #loss = output['kl_loss'] + torch.exp(log_lambda) * c_t + output['masks_loss']
     
     loss=loss.mean()
 
     wandb.log({"Loss/val_monet": loss.item(), "epoch": epoch}) #wandb 기록
 
-    return loss.item(),output
+    return loss.item(), output
 
 def vis_monet(images, masks, reconstructions, masks_list=None, save_dir='./vis', prefix='train_monet'):
     os.makedirs(save_dir, exist_ok=True)
@@ -229,78 +229,78 @@ def vis_constellation(images, a, r, a_hat, masks_list, o, save_dir='./vis', pref
         plt.close()
         print(f"Saved constealltion visualization to {save_path}")
 
-def monet_geco_step(model, x, optimizer, log_lambda, C_ma, constraint_fn, alpha=0.99, lr=1e-4): #device= 부분 수정,,?
-    """
-    GECO 알고리즘 한 배치 업데이트 함수
+# def monet_geco_step(model, x, optimizer, log_lambda, C_ma, constraint_fn, alpha=0.99, lr=1e-4): #device= 부분 수정,,?
+#     """
+#     GECO 알고리즘 한 배치 업데이트 함수
 
-    Args:
-        model: PyTorch 모델
-        x: 입력 배치 (Tensor)
-        optimizer: 모델 파라미터용 옵티마이저
-        log_lambda: 라그랑주 승수의 로그값 (Tensor, requires_grad=True 아님)
-        C_ma: 이전까지의 제약 조건 moving average (float 또는 Tensor)
-        constraint_fn: 제약 조건을 계산하는 함수 (x, recon_x) -> Tensor
-        alpha: moving average 하이퍼파라미터
-        lr: 학습률 (옵티마이저 lr과 별도)
-        device: 연산 디바이스
+#     Args:
+#         model: PyTorch 모델
+#         x: 입력 배치 (Tensor)
+#         optimizer: 모델 파라미터용 옵티마이저
+#         log_lambda: 라그랑주 승수의 로그값 (Tensor, requires_grad=True 아님)
+#         C_ma: 이전까지의 제약 조건 moving average (float 또는 Tensor)
+#         constraint_fn: 제약 조건을 계산하는 함수 (x, recon_x) -> Tensor
+#         alpha: moving average 하이퍼파라미터
+#         lr: 학습률 (옵티마이저 lr과 별도)
+#         device: 연산 디바이스
 
-    Returns:
-        loss_value: 현재 배치 손실(float)
-        updated_log_lambda: 업데이트된 log_lambda (Tensor)
-        updated_C_ma: 업데이트된 moving average (Tensor)
-    """
-    model.train()
-    optimizer.zero_grad()
+#     Returns:
+#         loss_value: 현재 배치 손실(float)
+#         updated_log_lambda: 업데이트된 log_lambda (Tensor)
+#         updated_C_ma: 업데이트된 moving average (Tensor)
+#     """
+#     model.train()
+#     optimizer.zero_grad()
 
-    # 모델에서 재구성, 잠재평균, 로그분산 반환 (VAE 구조)
-    output = model(x)
-    # recon_loss=output['recon_loss']
-    # kl_loss=output['kl_loss']
-    # masks_loss=output['masks_loss']
-    recon_loss = torch.clamp(output['recon_loss'], max=50000)
-    kl_loss = torch.clamp(output['kl_loss'], max=50000)
-    masks_loss = torch.clamp(output['masks_loss'], max=50000)
+#     # 모델에서 재구성, 잠재평균, 로그분산 반환 (VAE 구조)
+#     output = model(x)
+#     # recon_loss=output['recon_loss']
+#     # kl_loss=output['kl_loss']
+#     # masks_loss=output['masks_loss']
+#     recon_loss = torch.clamp(output['recon_loss'], max=50000)
+#     kl_loss = torch.clamp(output['kl_loss'], max=50000)
+#     masks_loss = torch.clamp(output['masks_loss'], max=50000)
 
-    print("recon_loss:",recon_loss.mean().item())
-    print("kl_loss:",kl_loss.mean().item())
-    print("masks_loss:",masks_loss.mean().item())
+#     print("recon_loss:",recon_loss.mean().item())
+#     print("kl_loss:",kl_loss.mean().item())
+#     print("masks_loss:",masks_loss.mean().item())
 
 
-    # constraint로 reconstruction loss 계산
-    C_hat = monet_constraint_fn(recon_loss)
+#     # constraint로 reconstruction loss 계산
+#     C_hat = monet_constraint_fn(recon_loss)
 
-    # moving average 업데이트
-    if C_ma is None:
-        C_ma_new = C_hat.detach()
-    else:
-        C_ma_new = alpha * C_ma + (1 - alpha) * C_hat.detach()
+#     # moving average 업데이트
+#     if C_ma is None:
+#         C_ma_new = C_hat.detach()
+#     else:
+#         C_ma_new = alpha * C_ma + (1 - alpha) * C_hat.detach()
 
-    C_t = C_hat + (C_ma_new - C_hat).detach()
+#     C_t = C_hat + (C_ma_new - C_hat).detach()
 
-    # 최종 손실 = KL + λ * 제약 (reconstruction loss)
-    beta=torch.clamp(torch.exp(log_lambda), min=0.01) #beta값이 너무 작아지는 것을 방지
-    loss = kl_loss + beta* C_t + masks_loss
-    print("lambda (beta):", beta.item())
-    print("C_t:", C_t.item())
-    print()
-    loss=loss.mean()
+#     # 최종 손실 = KL + λ * 제약 (reconstruction loss)
+#     beta=torch.clamp(torch.exp(log_lambda), min=0.01) #beta값이 너무 작아지는 것을 방지
+#     loss = kl_loss + beta* C_t + masks_loss
+#     print("lambda (beta):", beta.item())
+#     print("C_t:", C_t.item())
+#     print()
+#     loss=loss.mean()
 
-    loss.backward()
+#     loss.backward()
 
-    torch.nn.utils.clip_grad_norm_(monet.parameters(), max_norm=1.0)
+#     torch.nn.utils.clip_grad_norm_(monet.parameters(), max_norm=1.0)
 
-    optimizer.step()
+#     optimizer.step()
 
-    #with torch.no_grad():
-    log_lambda =log_lambda + lr * C_t.detach()
+#     #with torch.no_grad():
+#     log_lambda =log_lambda + lr * C_t.detach()
 
-    wandb.log({"Loss/train_monet": loss.item(), "epoch": epoch}) #wandb 기록
+#     wandb.log({"Loss/train_monet": loss.item(), "epoch": epoch}) #wandb 기록
 
-    return loss.item(), log_lambda, C_ma_new, C_t, output
+#     return loss.item(), log_lambda, C_ma_new, C_t, output
 
-def monet_constraint_fn(recon_loss):
-    # 예: L2 리컨 오차가 특정 값 이하로 유지
-    return recon_loss.mean() - 5000 #target_constraint: κ ∈ {0.06, 0.08, 0.1, 0.125, 0.175}
+# def monet_constraint_fn(recon_loss):
+#     # 예: L2 리컨 오차가 특정 값 이하로 유지
+#     return recon_loss.mean() - 5000 #target_constraint: κ ∈ {0.06, 0.08, 0.1, 0.125, 0.175}
 
 
 
@@ -322,7 +322,7 @@ optimizer = optim.Adam(list(constellation.parameters()) + list(loss_fn.parameter
 
 
 # monet ckpt파일 로드
-ckpt_path = os.path.join(conf.checkpoint_dir, f'monet_{conf.data_num}_taming.ckpt')
+ckpt_path = os.path.join(conf.checkpoint_dir, f'monet_{conf.data_num}_again.ckpt')
 
 if os.path.isfile(ckpt_path):
     monet.load_state_dict(torch.load(ckpt_path))
@@ -334,16 +334,16 @@ else:
 
     for epoch in range(num_epochs): #monet 루프
         train_loss=0
-        log_lambda = torch.tensor([0.0], device=device)  # 초기값 #77
-        C_ma = None #77
+        # log_lambda = torch.tensor([0.0], device=device)  # 초기값 #77
+        # C_ma = None #77
         for batch in data_loader:
             x, _ = batch
             if use_cuda:
                 x = x.cuda() #x: 64,3,128,128
             
             # Train MONet
-            batch_loss, log_lambda, C_ma, c_t , _ = monet_geco_step(monet, x, optimizer_monet, log_lambda, C_ma, monet_constraint_fn, alpha=0.99, lr=1e-4) #77
-            #batch_loss=train_monet(monet, x, optimizer_monet, epoch)
+            #batch_loss, log_lambda, C_ma, c_t , _ = monet_geco_step(monet, x, optimizer_monet, log_lambda, C_ma, monet_constraint_fn, alpha=0.99, lr=1e-4) #77
+            batch_loss=train_monet(monet, x, optimizer_monet, epoch)
             train_loss+=batch_loss
 
         train_loss/=len(data_loader)
@@ -356,7 +356,7 @@ else:
             if use_cuda:
                 val_x = val_x.cuda()
 
-            batch_loss, output=val_monet(monet, c_t, val_x, epoch)
+            batch_loss, output=val_monet(monet, val_x, epoch)
             val_loss+=batch_loss
 
         val_loss/=len(val_data_loader)
@@ -376,7 +376,7 @@ for param in monet.parameters():
 
 
 # constellation pt 로드
-ckpt_path = os.path.join(conf.checkpoint_dir, f'constellation_{conf.data_num}_taming.ckpt')
+ckpt_path = os.path.join(conf.checkpoint_dir, f'constellation_{conf.data_num}.ckpt')
 
 if os.path.isfile(ckpt_path):
     constellation.load_state_dict(torch.load(ckpt_path))

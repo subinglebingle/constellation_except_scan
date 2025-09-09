@@ -303,8 +303,8 @@ class Monet(nn.Module):
             recon_loss = -p_x
             for d in range(1, p_x.dim()):  # batch 제외한 나머지 dim 평균
                 recon_loss = recon_loss.mean(dim=d, keepdim=False)
-            #loss += recon_loss + self.beta * kl_z
-            #p_xs += recon_loss
+            loss += recon_loss + self.beta * kl_z
+            p_xs += recon_loss
             kl_zs += kl_z
             # full reconstruction
             full_reconstruction += mask * torch.clamp(x_recon, -10, 10)
@@ -332,23 +332,20 @@ class Monet(nn.Module):
         tr_masks = masks.permute(0, 2, 3, 1) #tr_masks: batch,128,128,8
         tr_masks = tr_masks.clamp(min=1e-8, max=1.0)
 
-
         q_masks = dists.Categorical(probs=tr_masks)
         q_masks_recon = dists.Categorical(logits=torch.stack(mask_preds, 3)) #logits: batch,128,128,8
 
         kl_masks = dists.kl_divergence(q_masks, q_masks_recon)
         kl_masks = torch.sum(kl_masks, [1, 2])
 
-        #loss += self.gamma * kl_masks
+        loss += self.gamma * kl_masks
 
         # print("gamma*kl_masks:", torch.mean(self.gamma*kl_masks))
         # print()
         # print("loss:", torch.mean(loss))
         # print()
 
-        return {'recon_loss': recon_loss,
-                'kl_loss':kl_zs,
-                'masks_loss':self.gamma*kl_masks,
+        return {'loss':loss,
                 'masks': masks,           # 합쳐진 마스크 batch,8,128,128
                 'masks_list': masks_list, # 합치기 전 리스트 8,batch,1,128,128
                 'reconstructions': full_reconstruction,
@@ -720,43 +717,43 @@ class LossFunctions(nn.Module):
         L_total = L_rec + L_reorder + L_kl + L_entropy + L_condition
         return L_total
 
-class GECO(nn.Module):
-    def __init__(self, tolerance=0.05, alpha=0.99, lambda_step=1e-2):
-        super(GECO, self).__init__()
-        self.tolerance = tolerance
-        self.alpha = alpha
-        self.lambda_step = lambda_step
+# class GECO(nn.Module):
+#     def __init__(self, tolerance=0.05, alpha=0.99, lambda_step=1e-2):
+#         super(GECO, self).__init__()
+#         self.tolerance = tolerance
+#         self.alpha = alpha
+#         self.lambda_step = lambda_step
 
-        self.lambda_multiplier = torch.tensor(1., device=device) #.........수정...................................................device 따로 설정 안해줘도 되겟지 global인데,,?.. torch는 cpu에서만 해야되나,,? 수정!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-        self.C_ma = None  # constraint moving average
+#         self.lambda_multiplier = torch.tensor(1., device=device) #.........수정...................................................device 따로 설정 안해줘도 되겟지 global인데,,?.. torch는 cpu에서만 해야되나,,? 수정!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
+#         self.C_ma = None  # constraint moving average
 
-    def compute_constraint(self, recon_error):
-        # constraint = error - tolerance
-        constraint = recon_error - self.tolerance
-        return constraint
+#     def compute_constraint(self, recon_error):
+#         # constraint = error - tolerance
+#         constraint = recon_error - self.tolerance
+#         return constraint
 
-    def update(self, loss, recon_error):
-        constraint = self.compute_constraint(recon_error)
-        # moving average update
-        if self.C_ma is None:
-            self.C_ma = constraint.detach()
-        else:
-            self.C_ma = self.alpha * self.C_ma + (1 - self.alpha) * constraint.detach()
+#     def update(self, loss, recon_error):
+#         constraint = self.compute_constraint(recon_error)
+#         # moving average update
+#         if self.C_ma is None:
+#             self.C_ma = constraint.detach()
+#         else:
+#             self.C_ma = self.alpha * self.C_ma + (1 - self.alpha) * constraint.detach()
 
-        # GECO constraint with stop-gradient part
-        geco_constraint = constraint + (self.C_ma - constraint).detach()
+#         # GECO constraint with stop-gradient part
+#         geco_constraint = constraint + (self.C_ma - constraint).detach()
 
-        # Lagrangian loss combined
-        lagrangian = loss + self.lambda_multiplier * geco_constraint
+#         # Lagrangian loss combined
+#         lagrangian = loss + self.lambda_multiplier * geco_constraint
 
-        return lagrangian, geco_constraint
+#         return lagrangian, geco_constraint
 
-    def update_lambda(self, geco_constraint):
-        with torch.no_grad():
-            self.lambda_multiplier *= torch.exp(self.lambda_step * geco_constraint)
+#     def update_lambda(self, geco_constraint):
+#         with torch.no_grad():
+#             self.lambda_multiplier *= torch.exp(self.lambda_step * geco_constraint)
 
-    def get_lambda(self):
-        return self.lambda_multiplier.item()
+#     def get_lambda(self):
+#         return self.lambda_multiplier.item()
 
-    def get_moving_average(self):
-        return self.C_ma.item() if self.C_ma is not None else None
+#     def get_moving_average(self):
+#         return self.C_ma.item() if self.C_ma is not None else None
