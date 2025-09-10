@@ -228,7 +228,7 @@ class DecoderNet(nn.Module):
             nn.ReLU(inplace=True),
             nn.Conv2d(32, 4, 1),
         )
-        ys = torch.linspace(-1, 1, self.height + 8)
+        ys = torch.linspace(-1, 1, self.height + 8) #padding 없이 convolution하기 위해
         xs = torch.linspace(-1, 1, self.width + 8)
         ys, xs = torch.meshgrid(ys, xs, indexing='xy')
         coord_map = torch.stack((ys, xs)).unsqueeze(0)
@@ -715,7 +715,7 @@ class LossFunctions(nn.Module):
         L_reorder = self.reordering_loss(a_hat)
 
         L_total = L_rec + L_reorder + L_kl + L_entropy + L_condition
-        return L_total
+        return L_total, L_rec
 
 # class GECO(nn.Module):
 #     def __init__(self, tolerance=0.05, alpha=0.99, lambda_step=1e-2):

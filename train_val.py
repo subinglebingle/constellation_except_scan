@@ -126,7 +126,29 @@ def vis_monet(images, masks, reconstructions, masks_list=None, save_dir='./vis',
         plt.close()
         print(f"Saved monet visualization to {save_path}")
 
-def train_constellation(constellation, data, optimizer, epoch):
+def constraint_fn(recon_loss):  # L2 리컨 오차가 특정 값 이하로 유지
+    return recon_loss.mean() - 0.5 #target_constraint: κ ∈ {0.06, 0.08, 0.1, 0.125, 0.175}
+
+def train_constellation(constellation, data, optimizer, epoch, log_lambda, C_ma, constraint_fn, alpha=0.99, lr=1e-4):
+    """
+    GECO 알고리즘 한 배치 업데이트 함수
+
+    Args:
+        model: PyTorch 모델
+        x: 입력 배치 (Tensor)
+        optimizer: 모델 파라미터용 옵티마이저
+        log_lambda: 라그랑주 승수의 로그값 (Tensor, requires_grad=True 아님)
+        C_ma: 이전까지의 제약 조건 moving average (float 또는 Tensor)
+        constraint_fn: 제약 조건을 계산하는 함수 (x, recon_x) -> Tensor
+        alpha: moving average 하이퍼파라미터
+        lr: 학습률 (옵티마이저 lr과 별도)
+        device: 연산 디바이스
+
+    Returns:
+        loss_value: 현재 배치 손실(float)
+        updated_log_lambda: 업데이트된 log_lambda (Tensor)
+        updated_C_ma: 업데이트된 moving average (Tensor)
+    """
     constellation.train()
 
     if use_cuda:
@@ -137,11 +159,31 @@ def train_constellation(constellation, data, optimizer, epoch):
     # o=zs (128,8,16)
     
     a_hat, mu, logvar = constellation.module.decode(r)
-    loss = loss_fn.total_loss(a, a_hat, mu_q, logvar_q, o, learned_mask)
+    loss ,recon_loss= loss_fn.total_loss(a, a_hat, mu_q, logvar_q, o, learned_mask)
+    
+    print(f"total loss: {loss.item()}")
+    print(f"recon_loss: {recon_loss.item()}")
+
     loss.backward()
     optimizer.step()
 
+    C_hat=constraint_fn(recon_loss)
+    if C_ma is None:
+        C_ma_new=C_hat.detach()
+    else: C_ma_new=alpha * C_ma + (1-alpha) * C_hat.detach()
+
+    C_t = C_hat + (C_ma_new - C_hat).detach()
+    
+    loss=(loss-recon_loss)+ torch.exp(log_lambda)*C_t
+
+    loss.backward()
+    optimizer.step()
+
+    with torch.no_grad():
+        log_lambda = log_lambda + lr * C_t.detach()
+
     wandb.log({"Loss/train_constellation": loss.item(), "epoch": epoch}) #wandb 기록
+    wandb.log({"rec_Loss/train_constellation": recon_loss.item(), "epoch": epoch}) #wandb 기록
 
     return loss.item()
 
@@ -229,81 +271,6 @@ def vis_constellation(images, a, r, a_hat, masks_list, o, save_dir='./vis', pref
         plt.close()
         print(f"Saved constealltion visualization to {save_path}")
 
-# def monet_geco_step(model, x, optimizer, log_lambda, C_ma, constraint_fn, alpha=0.99, lr=1e-4): #device= 부분 수정,,?
-#     """
-#     GECO 알고리즘 한 배치 업데이트 함수
-
-#     Args:
-#         model: PyTorch 모델
-#         x: 입력 배치 (Tensor)
-#         optimizer: 모델 파라미터용 옵티마이저
-#         log_lambda: 라그랑주 승수의 로그값 (Tensor, requires_grad=True 아님)
-#         C_ma: 이전까지의 제약 조건 moving average (float 또는 Tensor)
-#         constraint_fn: 제약 조건을 계산하는 함수 (x, recon_x) -> Tensor
-#         alpha: moving average 하이퍼파라미터
-#         lr: 학습률 (옵티마이저 lr과 별도)
-#         device: 연산 디바이스
-
-#     Returns:
-#         loss_value: 현재 배치 손실(float)
-#         updated_log_lambda: 업데이트된 log_lambda (Tensor)
-#         updated_C_ma: 업데이트된 moving average (Tensor)
-#     """
-#     model.train()
-#     optimizer.zero_grad()
-
-#     # 모델에서 재구성, 잠재평균, 로그분산 반환 (VAE 구조)
-#     output = model(x)
-#     # recon_loss=output['recon_loss']
-#     # kl_loss=output['kl_loss']
-#     # masks_loss=output['masks_loss']
-#     recon_loss = torch.clamp(output['recon_loss'], max=50000)
-#     kl_loss = torch.clamp(output['kl_loss'], max=50000)
-#     masks_loss = torch.clamp(output['masks_loss'], max=50000)
-
-#     print("recon_loss:",recon_loss.mean().item())
-#     print("kl_loss:",kl_loss.mean().item())
-#     print("masks_loss:",masks_loss.mean().item())
-
-
-#     # constraint로 reconstruction loss 계산
-#     C_hat = monet_constraint_fn(recon_loss)
-
-#     # moving average 업데이트
-#     if C_ma is None:
-#         C_ma_new = C_hat.detach()
-#     else:
-#         C_ma_new = alpha * C_ma + (1 - alpha) * C_hat.detach()
-
-#     C_t = C_hat + (C_ma_new - C_hat).detach()
-
-#     # 최종 손실 = KL + λ * 제약 (reconstruction loss)
-#     beta=torch.clamp(torch.exp(log_lambda), min=0.01) #beta값이 너무 작아지는 것을 방지
-#     loss = kl_loss + beta* C_t + masks_loss
-#     print("lambda (beta):", beta.item())
-#     print("C_t:", C_t.item())
-#     print()
-#     loss=loss.mean()
-
-#     loss.backward()
-
-#     torch.nn.utils.clip_grad_norm_(monet.parameters(), max_norm=1.0)
-
-#     optimizer.step()
-
-#     #with torch.no_grad():
-#     log_lambda =log_lambda + lr * C_t.detach()
-
-#     wandb.log({"Loss/train_monet": loss.item(), "epoch": epoch}) #wandb 기록
-
-#     return loss.item(), log_lambda, C_ma_new, C_t, output
-
-# def monet_constraint_fn(recon_loss):
-#     # 예: L2 리컨 오차가 특정 값 이하로 유지
-#     return recon_loss.mean() - 5000 #target_constraint: κ ∈ {0.06, 0.08, 0.1, 0.125, 0.175}
-
-
-
 #데이터셋 있으면 있는거 사용, 없으면 make_sprites
 dataset = datasets.Sprites(conf.data_dir, mode='train', transform=transform)
 val_dataset= datasets.Sprites(conf.data_dir, mode='val', transform=transform)
@@ -376,7 +343,7 @@ for param in monet.parameters():
 
 
 # constellation pt 로드
-ckpt_path = os.path.join(conf.checkpoint_dir, f'constellation_{conf.data_num}.ckpt')
+ckpt_path = os.path.join(conf.checkpoint_dir, f'constellation_{conf.data_num}_{conf.beta}.ckpt')
 
 if os.path.isfile(ckpt_path):
     constellation.load_state_dict(torch.load(ckpt_path))
@@ -387,13 +354,17 @@ else: #없으면 train constellation
     best_val_loss=float('inf')
     for epoch in range(num_epochs): #train constellation 루프
         train_loss=0
+        log_lambda = torch.tensor([0.0], device=device)  # 초기값 #77
+        C_ma = None #77
+
         for batch in data_loader:
             x, _ = batch
             if use_cuda:
                 x = x.cuda()
 
             # Train MONet
-            batch_loss=train_constellation(constellation, x, optimizer, epoch)
+                
+            batch_loss=train_constellation(constellation, x, optimizer, epoch, log_lambda, C_ma, constraint_fn)
             train_loss+=batch_loss
 
         train_loss/=len(data_loader)
