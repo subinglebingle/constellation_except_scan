@@ -47,7 +47,7 @@ sprite_config = MonetConfig(data_num=100000, #n=100000 #test할때 1500장으로
                             channel_base=128, #64
                             bg_sigma=0.09, #background sigma, 1번째 슬롯에만 쓰이는 파라미터, 잘 조절하면 slot1에 배경색만 나오게된다. (논문: 0.09)
                             fg_sigma=0.11, #논문: 0.11
-                            beta=0.5, #monet 논문 0.5 #인겸님 코드 8.0
+                            beta=1.0, #monet 논문 0.5 #인겸님 코드 8.0
                             gamma=0.5, #monet 논문 0.5
                             vae_sigma=0.05, #논문 0.05  #(?)
                             vae_beta=0.5, #논문 0.5  #(?)

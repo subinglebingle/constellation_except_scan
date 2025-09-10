@@ -16,7 +16,7 @@ conf=config.sprite_config
 
 import matplotlib.pyplot as plt
 import wandb
-wandb.init(project="Constellation without scan", name=f"{conf.data_num}")
+wandb.init(project="Constellation without scan", name=f"{conf.data_num}, beta={conf.beta}")
 #-----------------------------------------------------------------------------------------------------------------------------------
 # input_dim = 262144 #차원 맞추기(16*128*128) 
 # hidden_dim = conf.hidden_dim #128
@@ -322,7 +322,7 @@ optimizer = optim.Adam(list(constellation.parameters()) + list(loss_fn.parameter
 
 
 # monet ckpt파일 로드
-ckpt_path = os.path.join(conf.checkpoint_dir, f'monet_{conf.data_num}_again.ckpt')
+ckpt_path = os.path.join(conf.checkpoint_dir, f'monet_{conf.data_num}_{conf.beta}.ckpt')
 
 if os.path.isfile(ckpt_path):
     monet.load_state_dict(torch.load(ckpt_path))
