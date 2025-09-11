@@ -16,7 +16,20 @@ conf=config.sprite_config
 
 import matplotlib.pyplot as plt
 import wandb
+import argparse
+
+parser = argparse.ArgumentParser()
+parser.add_argument('--beta', type=float, default=conf.beta)
+args = parser.parse_args()
+
+# sprite_config를 새로 만들어서 beta만 덮어쓰기
+conf = conf._replace(beta=args.beta)
+
 wandb.init(project="Constellation without scan", name=f"{conf.data_num}, beta={conf.beta}")
+
+print("Training with beta =", conf.beta)
+
+
 #-----------------------------------------------------------------------------------------------------------------------------------
 # input_dim = 262144 #차원 맞추기(16*128*128) 
 # hidden_dim = conf.hidden_dim #128
@@ -82,7 +95,7 @@ def val_monet(monet, val_data, epoch):
 
     return loss.item(), output
 
-def vis_monet(images, masks, reconstructions, masks_list=None, save_dir='./vis', prefix='train_monet'):
+def vis_monet(images, masks, reconstructions, masks_list=None, save_dir='./vis', prefix='monet'):
     os.makedirs(save_dir, exist_ok=True)
     for i in range(3):
         # masks_list가 있으면 행 2, 없으면 행 1짜리
@@ -121,7 +134,7 @@ def vis_monet(images, masks, reconstructions, masks_list=None, save_dir='./vis',
                 axs[1, empty_idx].axis('off')
 
         plt.tight_layout()
-        save_path = os.path.join(save_dir, f'{prefix}_{epoch}th epoch_{i}.png')
+        save_path = os.path.join(save_dir, f'{conf.beta}_{prefix}_{epoch}th epoch_{i}.png')
         plt.savefig(save_path)
         plt.close()
         print(f"Saved monet visualization to {save_path}")
@@ -163,9 +176,6 @@ def train_constellation(constellation, data, optimizer, epoch, log_lambda, C_ma,
     
     print(f"total loss: {loss.item()}")
     print(f"recon_loss: {recon_loss.item()}")
-
-    loss.backward()
-    optimizer.step()
 
     C_hat=constraint_fn(recon_loss)
     if C_ma is None:

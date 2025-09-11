@@ -121,13 +121,13 @@ def make_sprites(n=conf.data_num, height=128, width=128): #h,w=64 였음 #500000
 
 class Sprites(Dataset):
     def __init__(self, directory, mode, n=conf.data_num, canvas_size=128, #canvas_size를 64에서 128로
-                transform=None): #mode=train/val/test       #원래는 train=True
+                transform=None):  #mode=train/val/test       #원래는 train=True
         np_file = 'sprites_{}_{}.npz'.format(n, canvas_size)
         full_path = os.path.join(directory, np_file)
         os.makedirs(directory, exist_ok=True)
         if not os.path.isfile(full_path):
             gen_data = make_sprites(n, canvas_size, canvas_size)
-            np.savez(full_path, **gen_data) #경로통일 full_path로!
+            np.savez(full_path, **gen_data)  #경로통일 full_path로!
 
         data = np.load(full_path)
 
