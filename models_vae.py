@@ -347,7 +347,7 @@ class Monet(nn.Module):
 
         return {'loss':loss,
                 'masks': masks,           # 합쳐진 마스크 batch,8,128,128
-                'masks_list': masks_list, # 합치기 전 리스트 8,batch,1,128,128
+                'masks_list': masks_list, # 합치기 전 리스트 8,batch,1,128,128 #1은 channel (color channel=3)
                 'reconstructions': full_reconstruction,
                 'zs': zs #........latent vector 모음 #batch, 8, latent_dim       (64,8,16)
                 }
@@ -363,19 +363,10 @@ class Monet(nn.Module):
     #kl_z: batch
 
 
-    def decoder_step(self, x, z, mask, sigma): #z:batch, latent
+    def decoder_step(self, x, z, mask, sigma): #z: (batch, latent)
         decoder_output = self.decoder(z) #batch,4,128,128
         x_recon = torch.sigmoid(decoder_output[:, :3])
         mask_pred = decoder_output[:, 3]
-
-        # nan 체크 및 출력
-        if torch.isnan(x_recon).any():
-            print("decoder_output contains nan:", torch.isnan(decoder_output).any().item())
-            print("decoder_output:", decoder_output)
-            print("x_recon contains nan:", torch.isnan(x_recon).any().item())
-            print("x_recon:", x_recon)
-            print("mask_pred contains nan:", torch.isnan(mask_pred).any().item())
-            print("mask_pred:", mask_pred)
 
         dist = dists.Normal(x_recon, sigma)
         p_x = dist.log_prob(x)
@@ -396,13 +387,14 @@ class MaskExtractor(nn.Module):
         super().__init__()
         self.num_slots = num_slots
         self.latent_dim = latent_dim
-        # mask extractor: input (B, num_slots, latent_dim) → output (B, 1, latent_dim)
+        # mask extractor: input (B, num_slots, latent_dim) → output (1, num_slots, latent_dim) or (1, num_slot, 1)
         self.mask_extractor = nn.Sequential(
-            nn.Conv1d(num_slots, 16, 3, padding=1),
+            #nn.Conv1d(num_slots, 16, 3, padding=1),
+            nn.Conv1d(latent_dim, 16, 3, padding=1),
             nn.ReLU(),
             nn.Conv1d(16, 32, 3, padding=1),
             nn.ReLU(),
-            nn.Conv1d(32, 1, 1),
+            nn.Conv1d(32, 16, 1), # nn.Conv1d(32, 16, 1)는 soft assignment, nn.Conv1d(32, 1, 1) 은 hard assignment
             nn.Softmax(dim=2)   # latent_dim 축에 대해 softmax
         )
 
@@ -414,11 +406,16 @@ class MaskExtractor(nn.Module):
 
         # Conv1d input: (B, num_slots, latent_dim) → Conv1d expects (B, in_channels, length)
         x = entities  # (B, num_slots, latent_dim)
+        x = x.transpose(1, 2) #(B, latent_dim, num_slots)
         # Conv1d 입력은 (B, in_channels, L) 구조(슬롯이 채널)
-        masks = self.mask_extractor(x)  # (B, 1, latent_dim)
-        # 마스크 (B, 1, latent_dim) → (B, num_slots, latent_dim)로 브로드캐스팅 곱
+        masks = self.mask_extractor(x)  # (B, 1, latent_dim) #soft? hard? assignment
+        masks=masks.transpose(1,2)
+        # 마스크 (B, num_slots, 1) → (B, num_slots, latent_dim)로 브로드캐스팅 곱
+        # print("masks:", masks.shape)
+        # print("entities:", entities.shape)
         weighted_entities = entities * masks  # 자동 broadcast
-        return weighted_entities, masks  # 각각 (batch, num_slots, latent_dim), (batch, 1, latent_dim)
+        # print("weighted_entities:", weighted_entities.shape)
+        return weighted_entities, masks  # 각각 (batch, num_slots, latent_dim), (batch, num_slots, latent_dim)
 
  #여기부터 GNN 코드를 논문에 나온대로
 class EdgeMLP(nn.Module):
@@ -626,8 +623,6 @@ class Constellation(nn.Module):
         a_hat = self.lstm.reparameterize(mu_outputs, logvar_outputs)
         return a_hat, mu_outputs, logvar_outputs
 
-
-
 class LossFunctions(nn.Module):
     def __init__(self, conf, beta=4, gamma_init=0.1, latent_dim=conf.latent_dim):
         super(LossFunctions, self).__init__()
@@ -716,44 +711,3 @@ class LossFunctions(nn.Module):
 
         L_total = L_rec + L_reorder + L_kl + L_entropy + L_condition
         return L_total, L_rec
-
-# class GECO(nn.Module):
-#     def __init__(self, tolerance=0.05, alpha=0.99, lambda_step=1e-2):
-#         super(GECO, self).__init__()
-#         self.tolerance = tolerance
-#         self.alpha = alpha
-#         self.lambda_step = lambda_step
-
-#         self.lambda_multiplier = torch.tensor(1., device=device) #.........수정...................................................device 따로 설정 안해줘도 되겟지 global인데,,?.. torch는 cpu에서만 해야되나,,? 수정!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
-#         self.C_ma = None  # constraint moving average
-
-#     def compute_constraint(self, recon_error):
-#         # constraint = error - tolerance
-#         constraint = recon_error - self.tolerance
-#         return constraint
-
-#     def update(self, loss, recon_error):
-#         constraint = self.compute_constraint(recon_error)
-#         # moving average update
-#         if self.C_ma is None:
-#             self.C_ma = constraint.detach()
-#         else:
-#             self.C_ma = self.alpha * self.C_ma + (1 - self.alpha) * constraint.detach()
-
-#         # GECO constraint with stop-gradient part
-#         geco_constraint = constraint + (self.C_ma - constraint).detach()
-
-#         # Lagrangian loss combined
-#         lagrangian = loss + self.lambda_multiplier * geco_constraint
-
-#         return lagrangian, geco_constraint
-
-#     def update_lambda(self, geco_constraint):
-#         with torch.no_grad():
-#             self.lambda_multiplier *= torch.exp(self.lambda_step * geco_constraint)
-
-#     def get_lambda(self):
-#         return self.lambda_multiplier.item()
-
-#     def get_moving_average(self):
-#         return self.C_ma.item() if self.C_ma is not None else None
