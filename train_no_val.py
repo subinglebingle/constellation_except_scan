@@ -25,12 +25,15 @@ args = parser.parse_args()
 # sprite_config를 새로 만들어서 beta만 덮어쓰기
 conf = conf._replace(beta=args.beta)
 
-wandb.init(project="Constellation without scan", name=f"{conf.data_num}, beta={conf.beta}")
+wandb.init(project="Constellation without scan, no validation", name=f"{conf.data_num}, beta={conf.beta}")
 
 print("Training with beta =", conf.beta)
 
 
-#--------------------------------------------------------------------------------------------------
+#-----------------------------------------------------------------------------------------------------------------------------------
+# input_dim = 262144 #차원 맞추기(16*128*128) 
+# hidden_dim = conf.hidden_dim #128
+# output_dim = 64
 latent_dim = conf.latent_dim #16
 r_dim = conf.r_dim #16
 height = 128  # Height of the input image
@@ -73,7 +76,7 @@ def train_monet(monet, data, optimizer, epoch):
 
     wandb.log({"Loss/train_monet": loss.item(), "epoch": epoch}) #wandb 기록
 
-    return loss.item()
+    return loss.item(), output
 
 def val_monet(monet, val_data, epoch):
     monet.eval()
@@ -123,7 +126,7 @@ def vis_monet(images, masks, reconstructions, masks_list=None, save_dir='./vis_m
             num_slots = len(masks_list)
             for slot_idx in range(num_slots): 
                 slot_mask = masks_list[slot_idx][i].sum(axis=0)  # 채널 축 합쳐서 (H,W)로
-                axs[1, slot_idx].imshow(slot_mask.squeeze(), cmap="gray")
+                axs[1, slot_idx].imshow(slot_mask)
                 axs[1, slot_idx].set_title(f'Mask {slot_idx}')
                 axs[1, slot_idx].axis('off')
             # 만약 slots가 3보다 적으면 빈 칸은 없애기
@@ -193,7 +196,7 @@ def train_constellation(constellation, data, optimizer, epoch, log_lambda, C_ma,
     wandb.log({"Loss/train_constellation": loss.item(), "epoch": epoch}) #wandb 기록
     wandb.log({"rec_Loss/train_constellation": recon_loss.item(), "epoch": epoch}) #wandb 기록
 
-    return loss.item(), recon_loss.item()
+    return loss.item(), recon_loss.item(), a, r, a_hat, masks_list, o
 
 def val_constellation(constellation, val_data, epoch):
     constellation.eval()
@@ -248,7 +251,8 @@ def vis_constellation(images, a, r, a_hat, masks_list, o, save_dir='./vis_cons',
         #print(oa.shape) #8, 3, 128, 128 
 
         # axs[0, 1].imshow((oa.sum(axis=0)).cpu().numpy().transpose(1, 2, 0))
-        axs[0, 1].imshow((a_full_reconstruction[i]).cpu().numpy().transpose(1, 2, 0))
+        #axs[0, 1].imshow((a_full_reconstruction[i]).cpu().numpy().transpose(1, 2, 0))
+        axs[0, 1].imshow((a_full_reconstruction[i].detach()).cpu().numpy().transpose(1, 2, 0))
         axs[0, 1].set_title('a')
         axs[0, 1].axis('off')
         
@@ -260,11 +264,10 @@ def vis_constellation(images, a, r, a_hat, masks_list, o, save_dir='./vis_cons',
             ahat_preds.append(ahat_pred)
 
             ahat_full_reconstruction += mask * torch.clamp(ahat_recon, -10, 10)
-        print("ahat_preds:",len(ahat_preds),len(ahat_preds[0]),len(ahat_preds[0][0]),len(ahat_preds[0][0][0]))
-        print("ahat_full_reconstruction",len(ahat_full_reconstruction),len(ahat_full_reconstruction[0]),len(ahat_full_reconstruction[0][0]))
+
         # _, oahat, _=monet.module.decoder_step(images[i], a_hat[i], masks_i, sigma)
         #_, oahat_recon, oahat_pred=monet.module.decoder_step(images, o*a_hat, masks_list, sigma)
-        axs[0, 2].imshow((ahat_full_reconstruction[i]).cpu().numpy().transpose(1, 2, 0))
+        axs[0, 2].imshow((ahat_full_reconstruction[i].detach()).cpu().numpy().transpose(1, 2, 0))
         axs[0, 2].set_title('a_hat')
         axs[0, 2].axis('off')
 
@@ -277,21 +280,21 @@ def vis_constellation(images, a, r, a_hat, masks_list, o, save_dir='./vis_cons',
         for slot_idx in range(num_slots): 
             slot_mask = masks_list[slot_idx] #.sum(axis=0)  # 채널 축 합쳐서 (H,W)로
             #axs[1, slot_idx].imshow(slot_mask.cpu().numpy())
-            axs[1, slot_idx].imshow(slot_mask[i].squeeze().cpu().numpy(), cmap="gray") # , cmap="gray")
+            axs[1, slot_idx].imshow(slot_mask[i].squeeze().detach().cpu().numpy()) # , cmap="gray")
             axs[1, slot_idx].set_title(f'Mask {slot_idx}')
             axs[1, slot_idx].axis('off')
 
         # 3행: oa
         for slot_idx in range(num_slots): 
             slot_mask = a_preds[slot_idx] #.sum(axis=0)  # 채널 축 합쳐서 (H,W)로
-            axs[2, slot_idx].imshow(slot_mask[i].cpu().numpy(), cmap="gray")
+            axs[2, slot_idx].imshow(slot_mask[i].detach().cpu().numpy())
             axs[2, slot_idx].set_title(f'a {slot_idx}')
             axs[2, slot_idx].axis('off')
 
         # 4행: oahat
         for slot_idx in range(num_slots): 
             slot_mask = ahat_preds[slot_idx] #.sum(axis=0)  # 채널 축 합쳐서 (H,W)로
-            axs[3, slot_idx].imshow(slot_mask[i].cpu().numpy(), cmap="gray")
+            axs[3, slot_idx].imshow(slot_mask[i].detach().cpu().numpy())
             axs[3, slot_idx].set_title(f'a_hat {slot_idx}')
             axs[3, slot_idx].axis('off')
 
@@ -313,11 +316,13 @@ constellation = nn.DataParallel(models.Constellation(conf, monet).to(device)) #i
 # monet = (models.Monet(conf, height, width).to(device))
 # constellation = (models.Constellation(conf, monet).to(device))
 
+
 optimizer_monet = optim.RMSprop(monet.parameters(), lr=1e-5) #monet 논문: 1e-4, taming vae논문: 1e-5
 optimizer = optim.Adam(list(constellation.parameters()) + list(loss_fn.parameters()), lr=1e-4) #논문:1e-3에서 1e-4로 스케줄링,, taming vae논문
 
+
 # monet ckpt파일 로드
-ckpt_path = os.path.join(conf.checkpoint_dir, f'monet_{conf.data_num}_{conf.beta}.ckpt')
+ckpt_path = os.path.join(conf.checkpoint_dir, f'monet_no_val_{conf.data_num}_{conf.beta}.ckpt')
 
 if os.path.isfile(ckpt_path):
     monet.load_state_dict(torch.load(ckpt_path))
@@ -329,46 +334,35 @@ else:
 
     for epoch in range(num_epochs): #monet 루프
         train_loss=0
+        # log_lambda = torch.tensor([0.0], device=device)  # 초기값 #77
+        # C_ma = None #77
         for batch in data_loader:
             x, _ = batch
             if use_cuda:
                 x = x.cuda() #x: 64,3,128,128
             
             # Train MONet
-            batch_loss=train_monet(monet, x, optimizer_monet, epoch)
+            #batch_loss, log_lambda, C_ma, c_t , _ = monet_geco_step(monet, x, optimizer_monet, log_lambda, C_ma, monet_constraint_fn, alpha=0.99, lr=1e-4) #77
+            batch_loss, output=train_monet(monet, x, optimizer_monet, epoch)
             train_loss+=batch_loss
 
         train_loss/=len(data_loader)
 
         print(f'MONet Epoch {epoch+1}/{num_epochs}, loss: {train_loss}')
 
-        val_loss=0.0
-        for val_batch in val_data_loader: 
-            val_x, _ = val_batch
-            if use_cuda:
-                val_x = val_x.cuda()
-
-            batch_loss, output=val_monet(monet, val_x, epoch)
-            val_loss+=batch_loss
-
-        val_loss/=len(val_data_loader)
-
-        if val_loss < best_val_loss:
-            best_val_loss=val_loss
-            print(f'Updated .ckpt, loss: {best_val_loss}')
-            torch.save(monet.state_dict(), ckpt_path)
-            masks_list_npy = [numpify(slot[:8]) for slot in output['masks_list']]
-            vis_monet(numpify(val_x[:8]),
-                                numpify(output['masks'][:8]),
-                                numpify(output['reconstructions'][:8]),
-                                masks_list_npy)
+        torch.save(monet.state_dict(), ckpt_path)
+        masks_list_npy = [numpify(slot[:8]) for slot in output['masks_list']]
+        vis_monet(numpify(x[:8]),
+                            numpify(output['masks'][:8]),
+                            numpify(output['reconstructions'][:8]),
+                            masks_list_npy)
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정
 
 
 # constellation pt 로드
-ckpt_path = os.path.join(conf.checkpoint_dir, f'cons_{conf.data_num}_{conf.beta}.ckpt')
+ckpt_path = os.path.join(conf.checkpoint_dir, f'cons_no_val_{conf.data_num}_{conf.beta}.ckpt')
 
 if os.path.isfile(ckpt_path):
     constellation.load_state_dict(torch.load(ckpt_path))
@@ -389,7 +383,7 @@ else: #없으면 train constellation
 
             # Train MONet
                 
-            batch_loss, recon_loss =train_constellation(constellation, x, optimizer, epoch, log_lambda, C_ma, constraint_fn)
+            batch_loss, recon_loss, a, r, a_hat, masks_list, o =train_constellation(constellation, x, optimizer, epoch, log_lambda, C_ma, constraint_fn)
             train_loss+=batch_loss
 
         train_loss/=len(data_loader)
@@ -399,23 +393,9 @@ else: #없으면 train constellation
 
         print(f'Constellation Epoch {epoch+1}/{num_epochs}, loss: {train_loss}')
 
-        val_loss=0.0
-        for val_batch in val_data_loader: 
-            val_x, _ = val_batch
-            if use_cuda:
-                val_x = val_x.cuda()
 
-            batch_loss, rec_loss, a, r, a_hat, masks_list, o=val_constellation(constellation, val_x, epoch)
-            val_loss+=batch_loss
-
-        val_loss/=len(val_data_loader)
-
-        if val_loss < best_val_loss:
-            best_val_loss=val_loss
-            print(f'Updated .ckpt, loss: {best_val_loss}')
-            #masks_list_npy = [numpify(slot[:8]) for slot in masks_list]
-            vis_constellation(val_x, a, r, a_hat, masks_list, o)
-            torch.save(constellation.state_dict(), ckpt_path)
+        vis_constellation(x, a, r, a_hat, masks_list, o)
+        torch.save(constellation.state_dict(), ckpt_path)
 
 for param in monet.parameters():
     param.requires_grad = False  # MONet 모델 고정

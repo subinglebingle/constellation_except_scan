@@ -96,10 +96,11 @@ def vis_final(images, save_dir='./vis_final', prefix='fianl'):
 
     with torch.no_grad():  
         r, mu_q, logvar_q, a, o, learned_mask, masks_list = constellation.encode(images)
-        a_hat, mu, logvar = constellation.decode(r)
-        loss,rec_loss = loss_fn.total_loss(a, a_hat, mu_q, logvar_q, o, learned_mask)
+        ahat, mu, logvar = constellation.decode(r)
+        #loss,rec_loss = loss_fn.total_loss(a, ahat, mu_q, logvar_q, o, learned_mask)
 
     for i in range(3):
+        #print(ahat[i])
         fig, axs = plt.subplots(4, num_slots, figsize=(8,num_slots))
 
         # 1행: 원본, 전체 마스크 합, 재구성
@@ -113,7 +114,6 @@ def vis_final(images, save_dir='./vis_final', prefix='fianl'):
             sigma = conf.bg_sigma if t == 0 else conf.fg_sigma
             _, a_recon, a_pred = monet.decoder_step(x, o[:,t]*a[:,t], mask, sigma)
             a_preds.append(a_pred)
-
             a_full_reconstruction += mask * torch.clamp(a_recon, -10, 10)
 
         axs[0, 1].imshow((a_full_reconstruction[i]).detach().numpy().transpose(1, 2, 0))
@@ -124,16 +124,37 @@ def vis_final(images, save_dir='./vis_final', prefix='fianl'):
         ahat_full_reconstruction = torch.zeros_like(images)
         for t, mask in enumerate(masks_list):
             sigma = conf.bg_sigma if t == 0 else conf.fg_sigma
-            _, ahat_recon, ahat_pred = monet.decoder_step(x, o[:,t]*a_hat[:,t], mask, sigma)
+            _, ahat_recon, ahat_pred = monet.decoder_step(x, o[:,t]*ahat[:,t], mask, sigma)
             ahat_preds.append(ahat_pred)
-
             ahat_full_reconstruction += mask * torch.clamp(ahat_recon, -10, 10)
+
         axs[0, 2].imshow((ahat_full_reconstruction[i]).detach().numpy().transpose(1, 2, 0))
-        axs[0, 2].set_title('a_hat')
+        axs[0, 2].set_title('a hat')
         axs[0, 2].axis('off')
 
-        # 1행의 [3:] 칸은 흰색 화면으로
-        for col in range(3, 8):
+        new_ahat_preds=[]
+        new_ahat_full_reconstruction=torch.zeros_like(images)
+        new_ahat = ahat.clone() # 새로운 tensor 생성 (원본 유지)
+        new_ahat[..., 3] = new_ahat[..., 3] - 5  # 마지막 차원 첫 번째 요소만 -1
+        print("ahat")
+        print(ahat[i])
+        print()
+        print("new a hat")
+        print(new_ahat[i])
+        print()
+
+        for t, mask in enumerate(masks_list):
+            sigma = conf.bg_sigma if t == 0 else conf.fg_sigma
+            _, new_ahat_recon, new_ahat_pred = monet.decoder_step(x, o[:,t]*new_ahat[:,t], mask, sigma)
+            new_ahat_preds.append(new_ahat_pred)
+            new_ahat_full_reconstruction += mask * torch.clamp(new_ahat_recon, -10, 10)
+
+        axs[0, 3].imshow((new_ahat_full_reconstruction[i]).detach().numpy().transpose(1, 2, 0))
+        axs[0, 3].set_title('new a hat')
+        axs[0, 3].axis('off')
+
+        # 1행의 [4:] 칸은 흰색 화면으로
+        for col in range(4, 8):
             axs[0, col].axis('off')
             axs[0, col].set_facecolor("white")
 
@@ -155,7 +176,7 @@ def vis_final(images, save_dir='./vis_final', prefix='fianl'):
         for slot_idx in range(num_slots): 
             slot_mask = ahat_preds[slot_idx] #.sum(axis=0)  # 채널 축 합쳐서 (H,W)로
             axs[3, slot_idx].imshow(slot_mask[i].detach().numpy(), cmap="gray")
-            axs[3, slot_idx].set_title(f'a_hat {slot_idx}')
+            axs[3, slot_idx].set_title(f'a hat {slot_idx}')
             axs[3, slot_idx].axis('off')
 
         plt.tight_layout()
