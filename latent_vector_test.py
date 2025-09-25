@@ -97,11 +97,22 @@ def vis_final(images, save_dir='./vis_final', prefix='fianl'):
     with torch.no_grad():  
         r, mu_q, logvar_q, a, o, learned_mask, masks_list = constellation.encode(images)
         ahat, mu, logvar = constellation.decode(r)
+
+        m_r=r.clone()        
+        m_ahat = ahat.clone() # 새로운 tensor 생성 (원본 유지)
+        m_r[..., 2] = - 1  # 마지막 차원 i 번째 요소만 -1
+        m_ahat, _, _=constellation.decode(m_r)
+
         #loss,rec_loss = loss_fn.total_loss(a, ahat, mu_q, logvar_q, o, learned_mask)
 
     for i in range(3):
-        #print(ahat[i])
         fig, axs = plt.subplots(4, num_slots, figsize=(8,num_slots))
+        print("r")
+        print(r[i])
+        print()
+        print("m_r")
+        print(m_r[i])
+        print()
 
         # 1행: 원본, 전체 마스크 합, 재구성
         axs[0, 0].imshow(images[i].permute(1, 2, 0).detach())
@@ -132,25 +143,16 @@ def vis_final(images, save_dir='./vis_final', prefix='fianl'):
         axs[0, 2].set_title('a hat')
         axs[0, 2].axis('off')
 
-        new_ahat_preds=[]
-        new_ahat_full_reconstruction=torch.zeros_like(images)
-        new_ahat = ahat.clone() # 새로운 tensor 생성 (원본 유지)
-        new_ahat[..., 3] = new_ahat[..., 3] - 5  # 마지막 차원 첫 번째 요소만 -1
-        print("ahat")
-        print(ahat[i])
-        print()
-        print("new a hat")
-        print(new_ahat[i])
-        print()
-
+        m_ahat_preds=[]
+        m_ahat_full_reconstruction=torch.zeros_like(images)
         for t, mask in enumerate(masks_list):
             sigma = conf.bg_sigma if t == 0 else conf.fg_sigma
-            _, new_ahat_recon, new_ahat_pred = monet.decoder_step(x, o[:,t]*new_ahat[:,t], mask, sigma)
-            new_ahat_preds.append(new_ahat_pred)
-            new_ahat_full_reconstruction += mask * torch.clamp(new_ahat_recon, -10, 10)
+            _, m_ahat_recon, m_ahat_pred = monet.decoder_step(x, o[:,t]*m_ahat[:,t], mask, sigma)
+            m_ahat_preds.append(m_ahat_pred)
+            m_ahat_full_reconstruction += mask * torch.clamp(m_ahat_recon, -10, 10)
 
-        axs[0, 3].imshow((new_ahat_full_reconstruction[i]).detach().numpy().transpose(1, 2, 0))
-        axs[0, 3].set_title('new a hat')
+        axs[0, 3].imshow((m_ahat_full_reconstruction[i]).detach().numpy().transpose(1, 2, 0))
+        axs[0, 3].set_title('modified_r')
         axs[0, 3].axis('off')
 
         # 1행의 [4:] 칸은 흰색 화면으로

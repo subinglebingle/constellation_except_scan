@@ -132,8 +132,18 @@ def vis_final(images, save_dir='./vis_final', prefix='fianl'):
         axs[0, 2].set_title('a_hat')
         axs[0, 2].axis('off')
 
+        a_preds = torch.stack(a_preds, dim=0)
+        axs[0, 3].imshow((a_preds.sum(dim=0)).detach().numpy().transpose(1, 2, 0))
+        axs[0, 3].set_title('a.sum')
+        axs[0, 3].axis('off')
+
+        ahat_preds = torch.stack(a_preds, dim=0)
+        axs[0, 4].imshow((ahat_preds.sum(dim=0)).detach().numpy().transpose(1, 2, 0))
+        axs[0, 4].set_title('a_hat.sum')
+        axs[0, 4].axis('off')
+
         # 1행의 [3:] 칸은 흰색 화면으로
-        for col in range(3, 8):
+        for col in range(5, 8):
             axs[0, col].axis('off')
             axs[0, col].set_facecolor("white")
 

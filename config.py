@@ -33,7 +33,7 @@ config_options = [
 
 MonetConfig = namedtuple('MonetConfig', config_options)
 
-sprite_config = MonetConfig(data_num=1500, #n=100000 #test할때 1500장으로 하는거 추천
+sprite_config = MonetConfig(data_num=100000, #n=100000 #test할때 1500장으로 하는거 추천
                             vis_every=50, #몇개마다 visualization할건지
                             batch_size=64, #논문: 64
                             num_epochs=20, #논문에서는 모든 실험 1000000 iteration 이상 진행
